@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Daily Wages Tracker</title>
+
+  <!-- jsPDF + autoTable -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root { --blue:#007bff; --green:#28a745; --red:#dc3545; --grey:#6c757d; --border:#ccc; --bg:#f9f9f9; --white:#fff; }
+    body { font-family: Arial, sans-serif; margin: 10px; background: var(--bg); }
+    h2 { text-align:center; color:#333; margin:6px 0 14px; }
+
+    /* Form layout per sketches */
+    .form { display:grid; gap:12px; grid-template-columns:1fr 1fr;
+      grid-template-areas:"owner owner" "date date" "name wage";
+      max-width:1100px; margin:0 auto; }
+    .field { display:flex; align-items:center; gap:10px; background:var(--white); padding:6px 10px; border-radius:6px; border:1px solid var(--border); }
+    .field label { min-width:110px; font-size:14px; }
+    .field input { flex:1 1 auto; border:1px solid transparent; outline:none; font-size:16px; padding:6px 8px; background:transparent; }
+    .field:focus-within { border-color:#aaa; }
+    .owner{grid-area:owner;} .date{grid-area:date;} .name{grid-area:name;} .wage{grid-area:wage;}
+
+    .actions { display:grid; grid-template-columns:repeat(4, minmax(150px,1fr)); gap:12px; max-width:1100px; margin:8px auto 0; }
+    button { cursor:pointer; color:#fff; border:none; border-radius:6px; padding:10px 12px; font-size:16px; }
+    #addBtn{background:var(--green);} #pdfBtn{background:var(--blue);} #clearDataBtn{background:var(--red);} #clearPdfBtn{background:var(--grey);}
+
+    .table-wrap { max-width:1100px; margin:16px auto 0; background:var(--white); border:1px solid var(--border); border-radius:6px; overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; min-width:540px; }
+    th, td { border:1px solid var(--border); padding:10px; text-align:center; }
+    th { background:var(--blue); color:#fff; }
+    tfoot td { font-weight:bold; }
+
+    /* Saved PDFs panel */
+    .saved-pdfs { max-width:1100px; margin:16px auto 0; background:#fff; border:1px solid #ccc; border-radius:6px; padding:10px; }
+    .saved-pdfs h3 { margin:0 0 8px; font-size:16px; }
+    .pdf-list { display:grid; grid-template-columns: 1fr auto auto; gap:8px 10px; align-items:center; }
+    .pdf-list .head { font-weight:bold; }
+    .pdf-list .size { color:#333; }
+    .pdf-list button { border-radius:6px; border:none; color:#fff; padding:6px 10px; cursor:pointer; font-size:14px; }
+    .btn-dl { background:#007bff; }
+    .btn-del { background:#dc3545; }
+    .btn-del-all { background:#6c757d; color:#fff; border:none; border-radius:6px; padding:8px 10px; cursor:pointer; margin-top:10px; }
+
+    @media (max-width: 768px){
+      .form { grid-template-columns:1fr; grid-template-areas:"owner""date""name""wage"; }
+      .actions { grid-template-columns:repeat(2,1fr); }
+    }
+    @media (max-width: 480px){
+      .field label { min-width:95px; font-size:13px; }
+      .field input { font-size:14px; }
+      button { font-size:14px; padding:9px 10px; }
+      table { font-size:12px; }
+      .pdf-list { grid-template-columns: 1fr auto; }
+      .pdf-list .size { display:none; }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Daily Wages Tracker</h2>
+
+  <div class="form">
+    <div class="field owner">
+      <label for="owner">Owner:</label>
+      <input type="text" id="owner" placeholder="Enter owner name"/>
+    </div>
+    <div class="field date">
+      <label for="date">Date:</label>
+      <input type="date" id="date"/>
+    </div>
+    <div class="field name">
+      <label for="name">Name:</label>
+      <input type="text" id="name" placeholder="Enter person name"/>
+    </div>
+    <div class="field wage">
+      <label for="wage">Wage:</label>
+      <input type="number" id="wage" placeholder="Enter wage"/>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="addBtn" onclick="addEntry()">Add Entry</button>
+    <button id="pdfBtn" onclick="generatePDF()">Generate PDF</button>
+    <button id="clearDataBtn" onclick="clearData()">Clear Data</button>
+    <button id="clearPdfBtn" onclick="deleteAllPdfs()">Clear PDFs</button>
+  </div>
+
+  <div class="table-wrap">
+    <table id="dataTable">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Name</th>
+          <th>Wage</th>
+          <th>Total Wages</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">Grand Total</td>
+          <td id="grandTotal">0</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="saved-pdfs">
+    <h3>Saved PDFs</h3>
+    <div id="pdfList" class="pdf-list">
+      <div class="head">File</div>
+      <div class="head size">Size</div>
+      <div class="head">Actions</div>
+    </div>
+    <button class="btn-del-all" onclick="deleteAllPdfs()">Delete All PDFs</button>
+  </div>
+
+  <script>
+    // ================= Data and table =================
+    let peopleData = JSON.parse(localStorage.getItem("wagesData")) || {};
+
+    function renderTable() {
+      const tbody = document.querySelector("#dataTable tbody");
+      tbody.innerHTML = "";
+      let grandTotal = 0;
+
+      for (let person in peopleData) {
+        const entries = [...peopleData[person]].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+        const total = entries.reduce((sum, e) => sum + Number(e.wage || 0), 0);
+        grandTotal += total;
+
+        entries.forEach((entry, index) => {
+          const row = tbody.insertRow();
+          row.insertCell(0).innerText = entry.date || "";
+          row.insertCell(1).innerText = person;
+          row.insertCell(2).innerText = Number(entry.wage || 0);
+          row.insertCell(3).innerText = index === entries.length - 1 ? total : "";
+        });
+      }
+      document.getElementById("grandTotal").innerText = grandTotal;
+    }
+
+    function addEntry() {
+      const owner = document.getElementById("owner").value.trim();
+      const date = document.getElementById("date").value;
+      const name = document.getElementById("name").value.trim();
+      const wage = parseFloat(document.getElementById("wage").value);
+
+      if (!owner) { alert("Please enter Owner Name once."); return; }
+      if (!date || !name || isNaN(wage)) { alert("Please fill all fields."); return; }
+
+      if (!peopleData[name]) peopleData[name] = [];
+      peopleData[name].push({ owner, date, wage });
+      localStorage.setItem("wagesData", JSON.stringify(peopleData));
+      renderTable();
+
+      // Clear only Name for the next entry
+      document.getElementById("name").value = "";
+      document.getElementById("name").focus();
+    }
+
+    function clearData() {
+      if (!confirm("Are you sure you want to clear all data?")) return;
+
+      // Reset memory and storage
+      peopleData = {};
+      try { localStorage.removeItem("wagesData"); }
+      catch(e) { localStorage.setItem("wagesData", JSON.stringify({})); }
+
+      // Re-render
+      renderTable();
+    }
+
+    // ================= PDF generation (unchanged layout) =================
+    async function generatePDF() {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      const owner = document.getElementById("owner").value.trim();
+      if (!owner) { alert("Please enter Owner Name first."); return; }
+
+      doc.setFontSize(14);
+      doc.text("Owner: " + owner, 10, 10);
+
+      let rows = [];
+      let grandTotal = 0;
+
+      for (let person in peopleData) {
+        const entries = [...peopleData[person]].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+        let total = entries.reduce((sum, entry) => sum + Number(entry.wage || 0), 0);
+        grandTotal += total;
+
+        entries.forEach((entry, index) => {
+          rows.push([
+            entry.date || "",
+            person,
+            Number(entry.wage || 0),
+            index === entries.length - 1 ? total : ""
+          ]);
+        });
+      }
+
+      doc.autoTable({
+        head: [["Date", "Name", "Wage", "Total Wages"]],
+        body: rows,
+        startY: 20
+      });
+
+      const finalY = doc.lastAutoTable.finalY + 10;
+      doc.text("Grand Total: " + grandTotal, 10, finalY);
+
+      const fileName = "Wages_Report_" + new Date().toISOString().slice(0,10) + "_" + Date.now() + ".pdf";
+
+      // Download immediately
+      doc.save(fileName);
+
+      // Also store it
+      const pdfBlob = doc.output("blob");
+      await savePdfRecord(fileName, pdfBlob);
+      await refreshPdfList();
+    }
+
+    // ================= IndexedDB storage for PDFs =================
+    const DB_NAME = 'wages_pdf_store';
+    const DB_VERSION = 1;
+    const STORE = 'pdfs';
+
+    function openDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) {
+            const os = db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+            os.createIndex('byTimestamp', 'timestamp');
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function savePdfRecord(name, blob) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).add({ name, size: blob.size, timestamp: Date.now(), blob });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function listPdfRecords() {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readonly');
+        const idx = tx.objectStore(STORE).index('byTimestamp');
+        const out = [];
+        idx.openCursor(null, 'prev').onsuccess = e => {
+          const cur = e.target.result;
+          if (cur) { out.push(cur.value); cur.continue(); } else { resolve(out); }
+        };
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function getPdfRecord(id) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function deletePdfRecord(id) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function clearAllPdfRecords() {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // ================= Saved PDFs UI =================
+    function fmtSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      const kb = bytes / 1024;
+      if (kb < 1024) return kb.toFixed(1) + ' KB';
+      return (kb / 1024).toFixed(1) + ' MB';
+    }
+
+    async function refreshPdfList() {
+      const list = document.getElementById('pdfList');
+      // Keep header cells (3), remove previous rows
+      while (list.children.length > 3) list.removeChild(list.lastChild);
+
+      const records = await listPdfRecords();
+      records.forEach(rec => {
+        const nameDiv = document.createElement('div');
+        nameDiv.textContent = rec.name + ' (' + new Date(rec.timestamp).toLocaleString() + ')';
+
+        const sizeDiv = document.createElement('div');
+        sizeDiv.className = 'size';
+        sizeDiv.textContent = fmtSize(rec.size);
+
+        const actionsDiv = document.createElement('div');
+
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'btn-dl';
+        dlBtn.textContent = 'Download';
+        dlBtn.onclick = async () => {
+          const r = await getPdfRecord(rec.id);
+          const url = URL.createObjectURL(r.blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = r.name;
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+        };
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-del';
+        delBtn.textContent = 'Delete';
+        delBtn.style.marginLeft = '8px';
+        delBtn.onclick = async () => {
+          await deletePdfRecord(rec.id);
+          await refreshPdfList();
+        };
+
+        actionsDiv.appendChild(dlBtn);
+        actionsDiv.appendChild(delBtn);
+
+        list.appendChild(nameDiv);
+        list.appendChild(sizeDiv);
+        list.appendChild(actionsDiv);
+      });
+    }
+
+    async function deleteAllPdfs() {
+      if (!confirm('Delete all saved PDFs?')) return;
+      await clearAllPdfRecords();
+      await refreshPdfList();
+    }
+
+    // ================= Init =================
+    renderTable();
+    refreshPdfList();
+  </script>
+</body>
+</html>
